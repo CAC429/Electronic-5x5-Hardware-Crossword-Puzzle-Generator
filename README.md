@@ -4,3 +4,5 @@ This repository demonstrates the work for a hardware implementation of the New Y
 Below are the links to different testing videos
 
 **Clue and Menu Testing:** https://youtu.be/ImO7fwwG2n8
+
+**Language Menu Testing**
