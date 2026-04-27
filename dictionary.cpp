@@ -11,19 +11,15 @@
 #include <algorithm>
 #include <set>
 
-// =============================================================================
 // load_dictionary — NOT USED (loading is done in .ino via ps_malloc)
 // Kept as a stub so the linker doesn't complain
-// =============================================================================
 WordDB load_dictionary(const std::string& language, const std::string& dict_dir) {
     WordDB word_db;
     Serial.println("[WARN] load_dictionary() stub called — use loadDictionary() in .ino instead");
     return word_db;
 }
 
-// =============================================================================
 // list_available_languages
-// =============================================================================
 std::vector<std::string> list_available_languages(const std::string& dict_dir) {
     std::vector<std::string> complete;
     std::set<std::string> candidates;
@@ -64,9 +60,7 @@ std::vector<std::string> list_available_languages(const std::string& dict_dir) {
     return complete;
 }
 
-// =============================================================================
 // get_word_stats
-// =============================================================================
 std::map<int, int> get_word_stats(const WordDB& word_db) {
     std::map<int, int> stats;
     for (const auto& [length, words] : word_db)

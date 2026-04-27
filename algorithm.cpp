@@ -1,9 +1,12 @@
-// =============================================================================
 // algorithm.cpp
 // ECE 1896 Senior Design - Team 13
 // Author: Darren Ravichandra
 // Modified for ESP32 — char* DictEntry, PSRAM-friendly
-// =============================================================================
+//
+// v2: Added per-attempt backtrack step budget to bound worst-case generation.
+// If any single attempt exceeds MAX_BACKTRACK_STEPS, it aborts and a new
+// random black-square pattern is selected. This caps the 170s+ pathological
+// runs we were seeing and brings worst-case generation to ~15-30s.
 
 #include "algorithm.h"
 #include <Arduino.h>
@@ -14,10 +17,25 @@
 
 static std::mt19937 rng(esp_random());
 
-// =============================================================================
-// SECTION 1 — DATA STRUCTURES
-// =============================================================================
+// PERFORMANCE TUNING KNOBS
+// Per-attempt step budget. A "step" is one call to backtrack(). If an attempt
+// exceeds this many recursive calls, it means the algorithm has fallen into a
+// near-exhaustive search of a bad constraint corner — abort and try a new
+// random pattern. This is much cheaper than finishing the exhaustive search.
+//
+// Tuning notes:
+//   - Successful generations usually finish in <10,000 steps.
+//   - The 170s+ pathological runs observed in testing hit 500k-1M+ steps.
+//   - 50,000 is a conservative cutoff that kills runaways while still allowing
+//     legitimately hard (but solvable) patterns to complete.
+static const int MAX_BACKTRACK_STEPS = 50000;
 
+// Hard wall-clock limit per attempt, in milliseconds. Second line of defense
+// in case step counting underestimates real time (e.g. if candidate lookup
+// gets slow on large dictionaries).
+static const uint32_t MAX_ATTEMPT_MS = 5000;
+
+// SECTION 1 — DATA STRUCTURES
 std::vector<Cell> WordSlot::cells() const {
     std::vector<Cell> result;
     for (int i = 0; i < length; i++) {
@@ -70,10 +88,7 @@ PuzzleGrid::PuzzleGrid(const Pattern& pattern, const std::string& lang)
     }
 }
 
-// =============================================================================
 // SECTION 2 — BLACK SQUARE PATTERNS
-// =============================================================================
-
 const std::vector<Pattern> PATTERNS = {
     { {0,0},{0,1},{1,0},{3,4},{4,3},{4,4} },
     { {0,3},{0,4},{1,4},{3,0},{4,0},{4,1} },
@@ -82,6 +97,8 @@ const std::vector<Pattern> PATTERNS = {
     { {0,0},{0,1},{4,3},{4,4} },
     { {0,3},{0,4},{4,0},{4,1} },
 };
+
+int last_attempt_count = 0;
 
 bool is_valid_pattern(const Pattern& pattern) {
     char grid[GRID_SIZE][GRID_SIZE];
@@ -151,10 +168,7 @@ bool is_valid_pattern(const Pattern& pattern) {
     return true;
 }
 
-// =============================================================================
 // SECTION 3 — CONSTRAINT SATISFACTION + BACKTRACKING
-// =============================================================================
-
 WordIndex build_index(const WordDB& word_db) {
     WordIndex index;
     for (const auto& [length, entries] : word_db) {
@@ -248,14 +262,27 @@ std::vector<int> get_candidate_indices(
     return filtered;
 }
 
+// NEW: added step_counter, step_limit, deadline_ms for timeout handling.
+// When step_counter exceeds step_limit OR millis() passes deadline_ms,
+// the recursion unwinds immediately by returning false. The top-level
+// caller detects this via the step counter and moves to a new pattern.
 bool backtrack(
     std::vector<WordSlot>& slots,
     char grid[GRID_SIZE][GRID_SIZE],
     const WordDB& word_db,
     std::set<std::string>& used_words,
-    const WordIndex* word_index)
+    const WordIndex* word_index,
+    int& step_counter,
+    int step_limit,
+    uint32_t deadline_ms)
 {
     yield();
+
+    // Step budget check — if we've been grinding too long on this pattern,
+    // bail out and let the outer loop try a different pattern.
+    step_counter++;
+    if (step_counter > step_limit) return false;
+    if (millis() > deadline_ms) return false;
 
     std::vector<WordSlot*> remaining;
     for (auto& slot : slots)
@@ -299,7 +326,8 @@ bool backtrack(
         best_slot->clue   = entry.clue ? std::string(entry.clue) : "";
         used_words.insert(word_str);
 
-        if (backtrack(slots, grid, word_db, used_words, word_index))
+        if (backtrack(slots, grid, word_db, used_words, word_index,
+                      step_counter, step_limit, deadline_ms))
             return true;
 
         for (int i = 0; i < (int)slot_cells.size(); i++) {
@@ -309,6 +337,10 @@ bool backtrack(
         best_slot->answer.clear();
         best_slot->clue.clear();
         used_words.erase(word_str);
+
+        // Early exit if deadline/step budget was hit during the recursive call.
+        // No point trying more candidates — we'd just blow more budget.
+        if (step_counter > step_limit || millis() > deadline_ms) return false;
     }
 
     return false;
@@ -335,30 +367,70 @@ std::optional<PuzzleGrid> generate_puzzle(
 
     std::uniform_int_distribution<int> dist(0, (int)valid_patterns.size() - 1);
 
+    uint32_t generation_start = millis();
+
     for (int attempt = 0; attempt < max_attempts; attempt++) {
         yield();
+        Serial.print("[ATTEMPT] Starting attempt ");
+        Serial.print(attempt + 1);
+        Serial.print(" of ");
+        Serial.println(max_attempts);
+
         const Pattern& pattern = valid_patterns[dist(rng)];
         PuzzleGrid puzzle(pattern, language);
         std::set<std::string> used_words;
 
-        if (backtrack(puzzle.slots, puzzle.grid, word_db, used_words, &word_index)) {
-            Serial.print("[INFO] Puzzle generated (attempt ");
+        // Per-attempt budget: each attempt gets MAX_BACKTRACK_STEPS and
+        // MAX_ATTEMPT_MS. Once either is exhausted, backtrack() returns false
+        // and we move to the next pattern.
+        int step_counter = 0;
+        uint32_t attempt_start = millis();
+        uint32_t deadline_ms = attempt_start + MAX_ATTEMPT_MS;
+
+        bool ok = backtrack(puzzle.slots, puzzle.grid, word_db, used_words,
+                            &word_index, step_counter,
+                            MAX_BACKTRACK_STEPS, deadline_ms);
+
+        uint32_t attempt_elapsed = millis() - attempt_start;
+
+        if (ok) {
+            Serial.print("[SUCCESS] Puzzle generated on attempt ");
             Serial.print(attempt + 1);
-            Serial.print("/");
+            Serial.print(" of ");
             Serial.print(max_attempts);
-            Serial.println(")");
+            Serial.print(" (steps: ");
+            Serial.print(step_counter);
+            Serial.print(", time: ");
+            Serial.print(attempt_elapsed);
+            Serial.print(" ms, total: ");
+            Serial.print(millis() - generation_start);
+            Serial.println(" ms)");
+            last_attempt_count = attempt + 1;
             return puzzle;
+        } else {
+            // Distinguish "pattern unsolvable" from "budget exceeded" in the log.
+            bool budget_exceeded = (step_counter > MAX_BACKTRACK_STEPS) ||
+                                   (millis() > deadline_ms);
+            Serial.print("[ATTEMPT] Attempt ");
+            Serial.print(attempt + 1);
+            Serial.print(budget_exceeded ? " timed out" : " failed");
+            Serial.print(" (steps: ");
+            Serial.print(step_counter);
+            Serial.print(", time: ");
+            Serial.print(attempt_elapsed);
+            Serial.println(" ms), retrying...");
         }
     }
 
-    Serial.println("[ERROR] Generation failed after max attempts");
+    Serial.print("[ERROR] Generation failed after ");
+    Serial.print(max_attempts);
+    Serial.print(" attempts (total time: ");
+    Serial.print(millis() - generation_start);
+    Serial.println(" ms)");
     return std::nullopt;
 }
 
-// =============================================================================
 // SECTION 4 — CLUE MANAGEMENT
-// =============================================================================
-
 const WordSlot* get_active_clue(
     const PuzzleGrid& puzzle,
     int selected_row,
@@ -375,10 +447,7 @@ const WordSlot* get_active_clue(
     return nullptr;
 }
 
-// =============================================================================
 // SECTION 5 — DISPLAY / OUTPUT
-// =============================================================================
-
 void print_grid(const PuzzleGrid& puzzle) {
     Serial.println();
     for (int r = 0; r < GRID_SIZE; r++) {

@@ -1,4 +1,3 @@
-#pragma once
 // =============================================================================
 // algorithm.h
 // ECE 1896 Senior Design - Team 13
@@ -6,6 +5,7 @@
 // Modified for ESP32 — char* DictEntry, WordIndex stores int indices
 // =============================================================================
 
+#pragma once
 #include "dictionary.h"
 
 #include <string>
@@ -14,10 +14,7 @@
 #include <map>
 #include <optional>
 
-// =============================================================================
 // SECTION 1 — DATA STRUCTURES
-// =============================================================================
-
 const int  GRID_SIZE = 5;
 const char BLACK_SQ  = '#';
 const char EMPTY_SQ  = '\0';
@@ -47,17 +44,11 @@ struct PuzzleGrid {
     void set_cell(int row, int col, char value) { grid[row][col] = value; }
 };
 
-// =============================================================================
 // SECTION 2 — BLACK SQUARE PATTERNS
-// =============================================================================
-
 extern const std::vector<Pattern> PATTERNS;
 bool is_valid_pattern(const Pattern& pattern);
 
-// =============================================================================
 // SECTION 3 — CSP + BACKTRACKING
-// =============================================================================
-
 using WordIndex = std::map<int, std::vector<std::map<char, std::vector<int>>>>;
 
 WordIndex build_index(const WordDB& word_db);
@@ -84,10 +75,7 @@ std::optional<PuzzleGrid> generate_puzzle(
     int max_attempts = 20
 );
 
-// =============================================================================
 // SECTION 4 — CLUE MANAGEMENT
-// =============================================================================
-
 const WordSlot* get_active_clue(
     const PuzzleGrid& puzzle,
     int selected_row,
@@ -95,10 +83,7 @@ const WordSlot* get_active_clue(
     const std::string& direction = "across"
 );
 
-// =============================================================================
 // SECTION 5 — DISPLAY / OUTPUT
-// =============================================================================
-
 void print_grid(const PuzzleGrid& puzzle);
 void print_clues(const PuzzleGrid& puzzle);
 void print_puzzle(const PuzzleGrid& puzzle);
