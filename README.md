@@ -5,4 +5,10 @@ Below are the links to different testing videos
 
 **Clue and Menu Testing:** https://youtu.be/ImO7fwwG2n8
 
-**Language Menu Testing**
+**Language Menu Testing:** https://youtu.be/hYpHjxoDbPA
+
+**Answer Check/Solution Test:** https://youtube.com/shorts/DVNcn8BAkhg
+
+**Full Prototype Test:** https://youtu.be/xuivbCUSUm4
+
+**Full Enclosure Test:** https://youtu.be/h5qCXp63jEw
